@@ -22,6 +22,34 @@ RAW_DIR = ROOT / ".raw"
 SCRIPTS = ROOT / "scripts"
 
 
+def git_commit_progress(message: str):
+    """Commit any new/changed files in the repo so partial progress is saved."""
+    print(f"\n  [GIT] Committing progress: {message}")
+    # Stage output directories and index
+    subprocess.run(
+        ["git", "add", "guidances/", "510k-summaries/", "pma-summaries/", "index.json"],
+        cwd=str(ROOT), capture_output=True
+    )
+    # Check if there's anything to commit
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=str(ROOT), capture_output=True
+    )
+    if result.returncode != 0:
+        # There are staged changes
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=str(ROOT), capture_output=True
+        )
+        subprocess.run(
+            ["git", "push"],
+            cwd=str(ROOT), capture_output=True
+        )
+        print(f"  [GIT] Committed and pushed.")
+    else:
+        print(f"  [GIT] Nothing new to commit.")
+
+
 def run_cmd(cmd: list[str], description: str) -> bool:
     """Run a subprocess command with logging."""
     print(f"\n{'='*60}")
@@ -114,14 +142,11 @@ def pipeline_guidances(incremental: bool = True, centers: str | None = None,
         print("  No raw guidance PDFs found — skipping extract/structure")
         return
 
+    # Step 2: Extract text from all downloaded PDFs
     for center_dir in sorted(guidance_raw.glob("*")):
         if not center_dir.is_dir():
             continue
 
-        output_dir = ROOT / "guidances" / center_dir.name
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Only extract PDFs that don't have .txt yet
         pdfs = list(center_dir.glob("*.pdf"))
         new_pdfs = [p for p in pdfs if not (center_dir / f"{p.stem}.txt").exists()]
         if new_pdfs:
@@ -131,17 +156,43 @@ def pipeline_guidances(incremental: bool = True, centers: str | None = None,
                 f"Extracting guidance PDFs for {center_dir.name}"
             )
 
-        # Only structure .txt files that don't have .md output yet
+    # Step 3: Structure with LLM, committing every BATCH_SIZE docs
+    BATCH_SIZE = 25
+    structured_count = 0
+
+    for center_dir in sorted(guidance_raw.glob("*")):
+        if not center_dir.is_dir():
+            continue
+
+        output_dir = ROOT / "guidances" / center_dir.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         txts = list(center_dir.glob("*.txt"))
         new_txts = [t for t in txts if not (output_dir / f"{t.stem}.md").exists()]
-        if new_txts:
+
+        for txt_path in sorted(new_txts):
+            meta_path = center_dir / f"{txt_path.stem}_meta.json"
+            meta_arg = ["--meta", str(meta_path)] if meta_path.exists() else []
+
             run_cmd(
                 [sys.executable, str(SCRIPTS / "structure_md.py"),
-                 "--batch", str(center_dir),
+                 "--input", str(txt_path),
                  "--doc-type", "guidance",
-                 "--output-dir", str(output_dir)],
-                f"Structuring guidances for {center_dir.name}"
+                 "--output-dir", str(output_dir)] + meta_arg,
+                f"Structuring {txt_path.stem} ({center_dir.name})"
             )
+            structured_count += 1
+
+            if structured_count % BATCH_SIZE == 0:
+                git_commit_progress(
+                    f"Add {structured_count} guidance docs (batch checkpoint)"
+                )
+
+    # Final commit for any remaining docs
+    if structured_count > 0:
+        git_commit_progress(
+            f"Add guidance docs (total: {structured_count} new this run)"
+        )
 
 
 def pipeline_pma(incremental: bool = True, product_codes: str = ""):

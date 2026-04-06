@@ -45,6 +45,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure git
+        run: |
+          git config user.name "FDA Pipeline Bot"
+          git config user.email "pipeline@aethl.com"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -83,56 +88,15 @@ jobs:
 
           python scripts/run_pipeline.py $ARGS
 
-      - name: Check for changes
-        id: check_changes
+      - name: Final commit
+        if: always()
         run: |
           git add -A
-          if git diff --cached --quiet; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "No new documents found."
-          else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "New or updated documents detected."
-            echo "## Changes detected:" >> $GITHUB_STEP_SUMMARY
-            git diff --cached --stat >> $GITHUB_STEP_SUMMARY
+          if ! git diff --cached --quiet; then
+            DATE=$(date -u +%Y-%m-%d)
+            git commit -m "Pipeline update: ${DATE} (final)"
+            git push
           fi
-
-      - name: Commit and push
-        if: steps.check_changes.outputs.has_changes == 'true'
-        run: |
-          git config user.name "FDA Pipeline Bot"
-          git config user.email "pipeline@aethl.com"
-
-          DATE=$(date -u +%Y-%m-%d)
-
-          NEW_510K=$(git diff --cached --name-only --diff-filter=A -- '510k-summaries/' | wc -l | xargs)
-          NEW_GUIDANCE=$(git diff --cached --name-only --diff-filter=A -- 'guidances/' | wc -l | xargs)
-          NEW_PMA=$(git diff --cached --name-only --diff-filter=A -- 'pma-summaries/' | wc -l | xargs)
-          MODIFIED=$(git diff --cached --name-only --diff-filter=M | wc -l | xargs)
-
-          MSG="Daily update: ${DATE}"
-          BODY=""
-
-          if [ "$NEW_510K" -gt 0 ]; then
-            BODY="${BODY}\n- ${NEW_510K} new 510(k) summaries"
-          fi
-          if [ "$NEW_GUIDANCE" -gt 0 ]; then
-            BODY="${BODY}\n- ${NEW_GUIDANCE} new guidance documents"
-          fi
-          if [ "$NEW_PMA" -gt 0 ]; then
-            BODY="${BODY}\n- ${NEW_PMA} new PMA summaries"
-          fi
-          if [ "$MODIFIED" -gt 0 ]; then
-            BODY="${BODY}\n- ${MODIFIED} updated documents"
-          fi
-
-          if [ -n "$BODY" ]; then
-            git commit -m "$MSG" -m "$(echo -e $BODY)"
-          else
-            git commit -m "$MSG"
-          fi
-
-          git push
 
       - name: Summary
         if: always()
