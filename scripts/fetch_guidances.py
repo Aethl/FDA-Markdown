@@ -58,7 +58,11 @@ def extract_href(html_str: str) -> str | None:
 def fetch_guidance_index() -> list[dict]:
     """Download and parse the FDA guidance JSON index."""
     print(f"Fetching guidance index from {FDA_GUIDANCE_JSON_URL}...")
-    resp = requests.get(FDA_GUIDANCE_JSON_URL, timeout=60)
+    headers = {
+        "User-Agent": "FDA-Markdown/1.0 (https://github.com/Aethl/FDA-Markdown; regulatory data pipeline)",
+        "Accept": "application/json",
+    }
+    resp = requests.get(FDA_GUIDANCE_JSON_URL, headers=headers, timeout=60)
     resp.raise_for_status()
     raw_records = resp.json()
     print(f"  Total guidance records: {len(raw_records)}")
@@ -139,8 +143,11 @@ def filter_guidances(records: list[dict],
 
 def download_guidance_pdf(url: str, output_path: Path) -> bool:
     """Download a guidance PDF from FDA servers."""
+    headers = {
+        "User-Agent": "FDA-Markdown/1.0 (https://github.com/Aethl/FDA-Markdown; regulatory data pipeline)",
+    }
     try:
-        resp = requests.get(url, timeout=60, allow_redirects=True)
+        resp = requests.get(url, headers=headers, timeout=60, allow_redirects=True)
         if resp.status_code == 200:
             content_type = resp.headers.get("content-type", "")
             if "pdf" in content_type or url.endswith("/download"):
