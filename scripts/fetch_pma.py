@@ -19,6 +19,7 @@ from ratelimit import limits, sleep_and_retry
 OPENFDA_PMA_URL = "https://api.fda.gov/device/pma.json"
 STATE_FILE = Path(__file__).parent.parent / ".pipeline_state.json"
 RAW_DIR = Path(__file__).parent.parent / ".raw" / "pma"
+OUTPUT_DIR = Path(__file__).parent.parent / "pma-summaries"
 
 
 @sleep_and_retry
@@ -155,8 +156,19 @@ def main():
     print(f"Fetching PMA records for product codes: {codes}")
     records = fetch_pma_records(codes, since=since)
 
+    # Skip records that already have .md output from a previous run
+    already_done = set()
+    for code_dir in OUTPUT_DIR.glob("*"):
+        if code_dir.is_dir():
+            for md_file in code_dir.glob("*.md"):
+                already_done.add(md_file.stem.upper())
+    if already_done:
+        print(f"Found {len(already_done)} already-structured PMA docs in repo")
+
     processed = set(state.get("processed_pma", []))
-    new_records = [r for r in records if r.get("pma_number") not in processed]
+    new_records = [r for r in records
+                   if r.get("pma_number") not in processed
+                   and r.get("pma_number", "").upper() not in already_done]
     print(f"New PMA records: {len(new_records)}")
 
     for record in new_records:

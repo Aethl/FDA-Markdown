@@ -20,7 +20,7 @@ from ratelimit import limits, sleep_and_retry
 OPENFDA_510K_URL = "https://api.fda.gov/device/510k.json"
 FDA_SUMMARY_BASE = "https://www.accessdata.fda.gov/cdrh_docs/pdf{}/{}.pdf"
 STATE_FILE = Path(__file__).parent.parent / ".pipeline_state.json"
-OUTPUT_DIR = Path(__file__).parent.parent / "510k-summaries"
+OUTPUT_DIR = Path(__file__).parent.parent / "510k-summaries"  # committed .md files
 RAW_DIR = Path(__file__).parent.parent / ".raw" / "510k"
 
 # openFDA allows 240 requests per minute without an API key,
@@ -213,8 +213,19 @@ def main():
     print(f"Fetching 510(k) records for product codes: {codes}")
     records = fetch_clearances(codes, since=since)
 
+    # Skip records that already have .md output from a previous run
+    already_done = set()
+    for code_dir in OUTPUT_DIR.glob("*"):
+        if code_dir.is_dir():
+            for md_file in code_dir.glob("*.md"):
+                already_done.add(md_file.stem.upper())
+    if already_done:
+        print(f"Found {len(already_done)} already-structured 510(k) docs in repo")
+
     already_processed = set(state.get("processed_510k", []))
-    new_records = [r for r in records if r.get("k_number") not in already_processed]
+    new_records = [r for r in records
+                   if r.get("k_number") not in already_processed
+                   and r.get("k_number", "").upper() not in already_done]
     print(f"New records to process: {len(new_records)}")
 
     for record in new_records:

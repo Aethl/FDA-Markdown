@@ -100,7 +100,10 @@ def pipeline_510k(incremental: bool = True, product_codes: str = ""):
                 f"Extracting PDFs in {code_dir.name}"
             )
 
-    # Step 3: Structure with LLM
+    # Step 3: Structure with LLM, committing every BATCH_SIZE docs
+    BATCH_SIZE = 25
+    structured_count = 0
+
     for code_dir in sorted((RAW_DIR / "510k").glob("*")):
         if not code_dir.is_dir():
             continue
@@ -110,14 +113,29 @@ def pipeline_510k(incremental: bool = True, product_codes: str = ""):
 
         txts = list(code_dir.glob("*.txt"))
         new_txts = [t for t in txts if not (output_dir / f"{t.stem}.md").exists()]
-        if new_txts:
+
+        for txt_path in sorted(new_txts):
+            meta_path = code_dir / f"{txt_path.stem}_meta.json"
+            meta_arg = ["--meta", str(meta_path)] if meta_path.exists() else []
+
             run_cmd(
                 [sys.executable, str(SCRIPTS / "structure_md.py"),
-                 "--batch", str(code_dir),
+                 "--input", str(txt_path),
                  "--doc-type", "510k",
-                 "--output-dir", str(output_dir)],
-                f"Structuring 510(k) summaries for {product_code}"
+                 "--output-dir", str(output_dir)] + meta_arg,
+                f"Structuring {txt_path.stem} ({product_code})"
             )
+            structured_count += 1
+
+            if structured_count % BATCH_SIZE == 0:
+                git_commit_progress(
+                    f"Add {structured_count} 510(k) summaries (batch checkpoint)"
+                )
+
+    if structured_count > 0:
+        git_commit_progress(
+            f"Add 510(k) summaries (total: {structured_count} new this run)"
+        )
 
 
 def pipeline_guidances(incremental: bool = True, centers: str | None = None,
