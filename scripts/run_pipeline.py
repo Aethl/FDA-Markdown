@@ -24,30 +24,36 @@ SCRIPTS = ROOT / "scripts"
 
 def git_commit_progress(message: str):
     """Commit any new/changed files in the repo so partial progress is saved."""
-    print(f"\n  [GIT] Committing progress: {message}")
+    print(f"\n  [GIT] Committing progress: {message}", flush=True)
     # Stage output directories and index
     subprocess.run(
         ["git", "add", "guidances/", "510k-summaries/", "pma-summaries/", "index.json"],
-        cwd=str(ROOT), capture_output=True
+        cwd=str(ROOT)
     )
     # Check if there's anything to commit
     result = subprocess.run(
         ["git", "diff", "--cached", "--quiet"],
-        cwd=str(ROOT), capture_output=True
+        cwd=str(ROOT)
     )
     if result.returncode != 0:
         # There are staged changes
-        subprocess.run(
+        commit_result = subprocess.run(
             ["git", "commit", "-m", message],
-            cwd=str(ROOT), capture_output=True
+            cwd=str(ROOT)
         )
-        subprocess.run(
-            ["git", "push"],
-            cwd=str(ROOT), capture_output=True
-        )
-        print(f"  [GIT] Committed and pushed.")
+        if commit_result.returncode == 0:
+            push_result = subprocess.run(
+                ["git", "push"],
+                cwd=str(ROOT)
+            )
+            if push_result.returncode == 0:
+                print(f"  [GIT] Committed and pushed.", flush=True)
+            else:
+                print(f"  [GIT] Push failed (code {push_result.returncode})", flush=True)
+        else:
+            print(f"  [GIT] Commit failed (code {commit_result.returncode})", flush=True)
     else:
-        print(f"  [GIT] Nothing new to commit.")
+        print(f"  [GIT] Nothing new to commit.", flush=True)
 
 
 def run_cmd(cmd: list[str], description: str) -> bool:

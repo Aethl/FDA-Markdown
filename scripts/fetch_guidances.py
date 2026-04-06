@@ -29,6 +29,7 @@ FDA_BASE_URL = "https://www.fda.gov"
 
 STATE_FILE = Path(__file__).parent.parent / ".pipeline_state.json"
 RAW_DIR = Path(__file__).parent.parent / ".raw" / "guidances"
+OUTPUT_DIR = Path(__file__).parent.parent / "guidances"
 
 # Map FDA center long names to short codes for directory structure
 CENTER_SHORT = {
@@ -217,7 +218,18 @@ def main():
                                topics=args.topics, status=args.status)
     print(f"After filtering: {len(records)} guidance records")
 
-    # Incremental: skip already-processed
+    # Skip any records that already have a .md output file (from a previous run)
+    already_done = set()
+    for center_dir in OUTPUT_DIR.glob("*"):
+        if center_dir.is_dir():
+            for md_file in center_dir.glob("*.md"):
+                already_done.add(md_file.stem)
+    if already_done:
+        before = len(records)
+        records = [r for r in records if r["slug"] not in already_done]
+        print(f"Skipped {before - len(records)} already-structured docs, {len(records)} remaining")
+
+    # Incremental: also skip based on state file (for within-session tracking)
     if args.incremental:
         records = [r for r in records if r["slug"] not in processed]
         print(f"New records (incremental): {len(records)}")
