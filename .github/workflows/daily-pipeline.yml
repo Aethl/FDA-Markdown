@@ -1,0 +1,137 @@
+name: Daily FDA Document Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      pipeline:
+        description: 'Which pipeline to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - 510k
+          - guidance
+          - pma
+      product_codes:
+        description: 'Comma-separated FDA product codes'
+        required: true
+        type: string
+      full_rebuild:
+        description: 'Full rebuild (ignore state, reprocess everything)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  update-documents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2 hour max — long runs can happen on full rebuild
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for meaningful diffs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PRODUCT_CODES: ${{ inputs.product_codes }}
+        run: |
+          ARGS="--product-codes $PRODUCT_CODES"
+
+          # Handle manual trigger inputs
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.pipeline }}" != "all" ]; then
+              ARGS="$ARGS --only ${{ inputs.pipeline }}"
+            fi
+            if [ "${{ inputs.full_rebuild }}" = "true" ]; then
+              ARGS="$ARGS --full-rebuild"
+            fi
+          fi
+
+          python scripts/run_pipeline.py $ARGS
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new documents found."
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "New or updated documents detected."
+            # Generate a summary of changes
+            echo "## Changes detected:" >> $GITHUB_STEP_SUMMARY
+            git diff --cached --stat >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Commit and push
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git config user.name "FDA Pipeline Bot"
+          git config user.email "pipeline@aethl.com"
+          
+          # Build a descriptive commit message
+          DATE=$(date -u +%Y-%m-%d)
+          
+          # Count new files by type
+          NEW_510K=$(git diff --cached --name-only --diff-filter=A -- '510k-summaries/' | wc -l | xargs)
+          NEW_GUIDANCE=$(git diff --cached --name-only --diff-filter=A -- 'guidances/' | wc -l | xargs)
+          NEW_PMA=$(git diff --cached --name-only --diff-filter=A -- 'pma-summaries/' | wc -l | xargs)
+          MODIFIED=$(git diff --cached --name-only --diff-filter=M | wc -l | xargs)
+          
+          MSG="Daily update: ${DATE}"
+          BODY=""
+          
+          if [ "$NEW_510K" -gt 0 ]; then
+            BODY="${BODY}\n- ${NEW_510K} new 510(k) summaries"
+          fi
+          if [ "$NEW_GUIDANCE" -gt 0 ]; then
+            BODY="${BODY}\n- ${NEW_GUIDANCE} new guidance documents"
+          fi
+          if [ "$NEW_PMA" -gt 0 ]; then
+            BODY="${BODY}\n- ${NEW_PMA} new PMA summaries"
+          fi
+          if [ "$MODIFIED" -gt 0 ]; then
+            BODY="${BODY}\n- ${MODIFIED} updated documents"
+          fi
+          
+          if [ -n "$BODY" ]; then
+            git commit -m "$MSG" -m "$(echo -e $BODY)"
+          else
+            git commit -m "$MSG"
+          fi
+          
+          git push
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Pipeline Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f index.json ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            python -c "
+          import json
+          with open('index.json') as f:
+              idx = json.load(f)
+          counts = {k: len(v) for k, v in idx['documents'].items()}
+          print(json.dumps({'last_updated': idx['last_updated'], 'document_counts': counts}, indent=2))
+          " >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi

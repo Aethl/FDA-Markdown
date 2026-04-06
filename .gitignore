@@ -1,0 +1,23 @@
+# Raw PDFs and extracted text (large, not needed in repo)
+.raw/
+
+# Pipeline state (regenerated each run)
+.pipeline_state.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local config and instructions
+.claude/
+CLAUDE.md
