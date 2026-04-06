@@ -4,8 +4,9 @@ Main pipeline orchestrator — runs the full fetch → extract → structure →
 This is what GitHub Actions calls daily.
 
 Usage:
-    python scripts/run_pipeline.py                    # Full run, all doc types
-    python scripts/run_pipeline.py --only 510k        # Only 510(k)s
+    python scripts/run_pipeline.py --only guidance --guidance-limit 50
+    python scripts/run_pipeline.py --only 510k --product-codes QMT,FRO
+    python scripts/run_pipeline.py                    # Full run (requires --product-codes)
     python scripts/run_pipeline.py --full-rebuild      # Ignore state, reprocess everything
 """
 
@@ -37,6 +38,10 @@ def run_cmd(cmd: list[str], description: str) -> bool:
 
 def pipeline_510k(incremental: bool = True, product_codes: str = ""):
     """Run the 510(k) pipeline: fetch → extract → structure."""
+    if not product_codes:
+        print("  Skipping 510(k) pipeline — no product codes specified")
+        return
+
     print("\n" + "="*60)
     print("  510(k) PIPELINE")
     print("="*60)
@@ -53,7 +58,6 @@ def pipeline_510k(incremental: bool = True, product_codes: str = ""):
         if not code_dir.is_dir():
             continue
         pdfs = list(code_dir.glob("*.pdf"))
-        # Only extract PDFs that don't already have a .txt
         new_pdfs = [p for p in pdfs if not (code_dir / f"{p.stem}.txt").exists()]
         if new_pdfs:
             run_cmd(
@@ -71,7 +75,6 @@ def pipeline_510k(incremental: bool = True, product_codes: str = ""):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         txts = list(code_dir.glob("*.txt"))
-        # Only structure .txt files that don't already have a .md output
         new_txts = [t for t in txts if not (output_dir / f"{t.stem}.md").exists()]
         if new_txts:
             run_cmd(
@@ -83,59 +86,84 @@ def pipeline_510k(incremental: bool = True, product_codes: str = ""):
             )
 
 
-def pipeline_guidances(incremental: bool = True):
+def pipeline_guidances(incremental: bool = True, centers: str | None = None,
+                       limit: int | None = None):
     """Run the guidance document pipeline."""
     print("\n" + "="*60)
     print("  GUIDANCE DOCUMENT PIPELINE")
     print("="*60)
 
-    # Fetch guidances
     fetch_script = SCRIPTS / "fetch_guidances.py"
-    if fetch_script.exists():
-        fetch_cmd = [sys.executable, str(fetch_script)]
-        if incremental:
-            fetch_cmd.append("--incremental")
-        run_cmd(fetch_cmd, "Fetching guidance documents from FDA")
+    if not fetch_script.exists():
+        print("  fetch_guidances.py not found — skipping")
+        return
 
-        # Extract and structure
-        guidance_raw = RAW_DIR / "guidances"
-        if guidance_raw.exists():
-            for center_dir in sorted(guidance_raw.glob("*")):
-                if not center_dir.is_dir():
-                    continue
-                output_dir = ROOT / "guidances" / center_dir.name
-                output_dir.mkdir(parents=True, exist_ok=True)
+    # Step 1: Fetch guidance index + PDFs
+    fetch_cmd = [sys.executable, str(fetch_script)]
+    if incremental:
+        fetch_cmd.append("--incremental")
+    if centers:
+        fetch_cmd.extend(["--centers"] + centers.split())
+    if limit:
+        fetch_cmd.extend(["--limit", str(limit)])
+    run_cmd(fetch_cmd, "Fetching guidance documents from FDA")
 
-                run_cmd(
-                    [sys.executable, str(SCRIPTS / "extract_pdf.py"),
-                     "--batch", str(center_dir)],
-                    f"Extracting guidance PDFs for {center_dir.name}"
-                )
-                run_cmd(
-                    [sys.executable, str(SCRIPTS / "structure_md.py"),
-                     "--batch", str(center_dir),
-                     "--doc-type", "guidance",
-                     "--output-dir", str(output_dir)],
-                    f"Structuring guidances for {center_dir.name}"
-                )
-    else:
-        print("  fetch_guidances.py not yet implemented — skipping")
+    # Step 2: Extract and structure
+    guidance_raw = RAW_DIR / "guidances"
+    if not guidance_raw.exists():
+        print("  No raw guidance PDFs found — skipping extract/structure")
+        return
+
+    for center_dir in sorted(guidance_raw.glob("*")):
+        if not center_dir.is_dir():
+            continue
+
+        output_dir = ROOT / "guidances" / center_dir.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Only extract PDFs that don't have .txt yet
+        pdfs = list(center_dir.glob("*.pdf"))
+        new_pdfs = [p for p in pdfs if not (center_dir / f"{p.stem}.txt").exists()]
+        if new_pdfs:
+            run_cmd(
+                [sys.executable, str(SCRIPTS / "extract_pdf.py"),
+                 "--batch", str(center_dir)],
+                f"Extracting guidance PDFs for {center_dir.name}"
+            )
+
+        # Only structure .txt files that don't have .md output yet
+        txts = list(center_dir.glob("*.txt"))
+        new_txts = [t for t in txts if not (output_dir / f"{t.stem}.md").exists()]
+        if new_txts:
+            run_cmd(
+                [sys.executable, str(SCRIPTS / "structure_md.py"),
+                 "--batch", str(center_dir),
+                 "--doc-type", "guidance",
+                 "--output-dir", str(output_dir)],
+                f"Structuring guidances for {center_dir.name}"
+            )
 
 
-def pipeline_pma(incremental: bool = True):
+def pipeline_pma(incremental: bool = True, product_codes: str = ""):
     """Run the PMA summary pipeline."""
+    if not product_codes:
+        print("  Skipping PMA pipeline — no product codes specified")
+        return
+
     print("\n" + "="*60)
     print("  PMA SUMMARY PIPELINE")
     print("="*60)
 
     fetch_script = SCRIPTS / "fetch_pma.py"
-    if fetch_script.exists():
-        fetch_cmd = [sys.executable, str(fetch_script)]
-        if incremental:
-            fetch_cmd.append("--incremental")
-        run_cmd(fetch_cmd, "Fetching PMA records from openFDA")
-    else:
-        print("  fetch_pma.py not yet implemented — skipping")
+    if not fetch_script.exists():
+        print("  fetch_pma.py not found — skipping")
+        return
+
+    fetch_cmd = [sys.executable, str(fetch_script),
+                 "--product-codes", product_codes]
+    if incremental:
+        fetch_cmd.append("--incremental")
+    run_cmd(fetch_cmd, "Fetching PMA records from openFDA")
 
 
 def update_index():
@@ -156,7 +184,6 @@ def update_index():
     # Index 510(k) summaries
     for md_file in sorted((ROOT / "510k-summaries").rglob("*.md")):
         content = md_file.read_text(encoding="utf-8")
-        # Try to parse frontmatter
         if content.startswith("---"):
             try:
                 import yaml
@@ -177,9 +204,22 @@ def update_index():
 
     # Index guidances
     for md_file in sorted((ROOT / "guidances").rglob("*.md")):
-        index["documents"]["guidances"].append({
-            "file": str(md_file.relative_to(ROOT)),
-        })
+        content = md_file.read_text(encoding="utf-8")
+        entry = {"file": str(md_file.relative_to(ROOT))}
+        if content.startswith("---"):
+            try:
+                import yaml
+                _, fm, _ = content.split("---", 2)
+                meta = yaml.safe_load(fm)
+                entry.update({
+                    "title": meta.get("title", ""),
+                    "fda_center": meta.get("fda_center", ""),
+                    "status": meta.get("status", ""),
+                    "date_issued": meta.get("date_issued", ""),
+                })
+            except Exception:
+                pass
+        index["documents"]["guidances"].append(entry)
 
     # Index PMA summaries
     for md_file in sorted((ROOT / "pma-summaries").rglob("*.md")):
@@ -202,8 +242,12 @@ def main():
                         help="Run only one pipeline")
     parser.add_argument("--full-rebuild", action="store_true",
                         help="Ignore state, reprocess everything")
-    parser.add_argument("--product-codes", type=str, required=True,
-                        help="Comma-separated FDA product codes for 510(k) pipeline")
+    parser.add_argument("--product-codes", type=str, default="",
+                        help="Comma-separated FDA product codes (required for 510k/pma)")
+    parser.add_argument("--guidance-centers", type=str, default=None,
+                        help="Space-separated FDA center codes for guidance filtering")
+    parser.add_argument("--guidance-limit", type=int, default=None,
+                        help="Max number of guidances to process")
     parser.add_argument("--skip-index", action="store_true",
                         help="Skip index rebuild")
     args = parser.parse_args()
@@ -217,10 +261,11 @@ def main():
         pipeline_510k(incremental=incremental, product_codes=args.product_codes)
 
     if args.only is None or args.only == "guidance":
-        pipeline_guidances(incremental=incremental)
+        pipeline_guidances(incremental=incremental, centers=args.guidance_centers,
+                           limit=args.guidance_limit)
 
     if args.only is None or args.only == "pma":
-        pipeline_pma(incremental=incremental)
+        pipeline_pma(incremental=incremental, product_codes=args.product_codes)
 
     if not args.skip_index:
         update_index()

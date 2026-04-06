@@ -14,8 +14,16 @@ on:
           - guidance
           - pma
       product_codes:
-        description: 'Comma-separated FDA product codes'
-        required: true
+        description: 'Comma-separated FDA product codes (required for 510k/pma)'
+        required: false
+        type: string
+      guidance_centers:
+        description: 'FDA centers for guidance filtering (e.g., CDRH CBER). Leave blank for all.'
+        required: false
+        type: string
+      guidance_limit:
+        description: 'Max number of guidances to process (leave blank for all)'
+        required: false
         type: string
       full_rebuild:
         description: 'Full rebuild (ignore state, reprocess everything)'
@@ -29,13 +37,13 @@ permissions:
 jobs:
   update-documents:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 2 hour max — long runs can happen on full rebuild
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for meaningful diffs
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,24 +52,33 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run pipeline
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PRODUCT_CODES: ${{ inputs.product_codes }}
         run: |
-          ARGS="--product-codes $PRODUCT_CODES"
+          ARGS=""
 
-          # Handle manual trigger inputs
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ inputs.pipeline }}" != "all" ]; then
-              ARGS="$ARGS --only ${{ inputs.pipeline }}"
-            fi
-            if [ "${{ inputs.full_rebuild }}" = "true" ]; then
-              ARGS="$ARGS --full-rebuild"
-            fi
+          PIPELINE="${{ inputs.pipeline }}"
+          if [ "$PIPELINE" != "all" ]; then
+            ARGS="$ARGS --only $PIPELINE"
+          fi
+
+          if [ -n "${{ inputs.product_codes }}" ]; then
+            ARGS="$ARGS --product-codes ${{ inputs.product_codes }}"
+          fi
+
+          if [ -n "${{ inputs.guidance_centers }}" ]; then
+            ARGS="$ARGS --guidance-centers ${{ inputs.guidance_centers }}"
+          fi
+
+          if [ -n "${{ inputs.guidance_limit }}" ]; then
+            ARGS="$ARGS --guidance-limit ${{ inputs.guidance_limit }}"
+          fi
+
+          if [ "${{ inputs.full_rebuild }}" = "true" ]; then
+            ARGS="$ARGS --full-rebuild"
           fi
 
           python scripts/run_pipeline.py $ARGS
@@ -76,7 +93,6 @@ jobs:
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "New or updated documents detected."
-            # Generate a summary of changes
             echo "## Changes detected:" >> $GITHUB_STEP_SUMMARY
             git diff --cached --stat >> $GITHUB_STEP_SUMMARY
           fi
@@ -86,19 +102,17 @@ jobs:
         run: |
           git config user.name "FDA Pipeline Bot"
           git config user.email "pipeline@aethl.com"
-          
-          # Build a descriptive commit message
+
           DATE=$(date -u +%Y-%m-%d)
-          
-          # Count new files by type
+
           NEW_510K=$(git diff --cached --name-only --diff-filter=A -- '510k-summaries/' | wc -l | xargs)
           NEW_GUIDANCE=$(git diff --cached --name-only --diff-filter=A -- 'guidances/' | wc -l | xargs)
           NEW_PMA=$(git diff --cached --name-only --diff-filter=A -- 'pma-summaries/' | wc -l | xargs)
           MODIFIED=$(git diff --cached --name-only --diff-filter=M | wc -l | xargs)
-          
+
           MSG="Daily update: ${DATE}"
           BODY=""
-          
+
           if [ "$NEW_510K" -gt 0 ]; then
             BODY="${BODY}\n- ${NEW_510K} new 510(k) summaries"
           fi
@@ -111,13 +125,13 @@ jobs:
           if [ "$MODIFIED" -gt 0 ]; then
             BODY="${BODY}\n- ${MODIFIED} updated documents"
           fi
-          
+
           if [ -n "$BODY" ]; then
             git commit -m "$MSG" -m "$(echo -e $BODY)"
           else
             git commit -m "$MSG"
           fi
-          
+
           git push
 
       - name: Summary
