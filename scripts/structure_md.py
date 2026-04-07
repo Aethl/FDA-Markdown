@@ -15,7 +15,6 @@ import os
 import sys
 from pathlib import Path
 
-import anthropic
 import yaml
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -205,6 +204,7 @@ def structure_document(raw_text: str, doc_type: str,
             raw_text=raw_text[:50000],
         )
 
+    import anthropic
     client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY env var
 
     response = client.messages.create(
