@@ -27,7 +27,7 @@ def git_commit_progress(message: str):
     print(f"\n  [GIT] Committing progress: {message}", flush=True)
     # Stage output directories and index
     subprocess.run(
-        ["git", "add", "guidances/", "510k-summaries/", "pma-summaries/", "index.json"],
+        ["git", "add", "guidances/", "510k-summaries/", "pma-summaries/", "index.json", "docs/"],
         cwd=str(ROOT)
     )
     # Check if there's anything to commit
@@ -265,22 +265,25 @@ def update_index():
                 _, fm, _ = content.split("---", 2)
                 meta = yaml.safe_load(fm)
                 index["documents"]["510k_summaries"].append({
-                    "file": str(md_file.relative_to(ROOT)),
+                    "file": str(md_file.relative_to(ROOT)).replace("\\", "/"),
                     "document_number": meta.get("document_number", ""),
                     "title": meta.get("title", ""),
                     "product_code": meta.get("product_code", ""),
                     "decision_date": meta.get("decision_date", ""),
+                    "decision": meta.get("decision", ""),
                     "applicant": meta.get("applicant", ""),
+                    "predicate_devices": meta.get("predicate_devices", []),
+                    "source_url": meta.get("source_url", ""),
                 })
             except Exception:
                 index["documents"]["510k_summaries"].append({
-                    "file": str(md_file.relative_to(ROOT)),
+                    "file": str(md_file.relative_to(ROOT)).replace("\\", "/"),
                 })
 
     # Index guidances
     for md_file in sorted((ROOT / "guidances").rglob("*.md")):
         content = md_file.read_text(encoding="utf-8")
-        entry = {"file": str(md_file.relative_to(ROOT))}
+        entry = {"file": str(md_file.relative_to(ROOT)).replace("\\", "/")}
         if content.startswith("---"):
             try:
                 import yaml
@@ -288,9 +291,14 @@ def update_index():
                 meta = yaml.safe_load(fm)
                 entry.update({
                     "title": meta.get("title", ""),
+                    "document_number": meta.get("document_number", ""),
                     "fda_center": meta.get("fda_center", ""),
                     "status": meta.get("status", ""),
                     "date_issued": meta.get("date_issued", ""),
+                    "topics": meta.get("topics", []),
+                    "docket_number": meta.get("docket_number", ""),
+                    "regulated_product": meta.get("regulated_product", ""),
+                    "source_url": meta.get("source_url", ""),
                 })
             except Exception:
                 pass
@@ -298,13 +306,36 @@ def update_index():
 
     # Index PMA summaries
     for md_file in sorted((ROOT / "pma-summaries").rglob("*.md")):
-        index["documents"]["pma_summaries"].append({
-            "file": str(md_file.relative_to(ROOT)),
-        })
+        content = md_file.read_text(encoding="utf-8")
+        entry = {"file": str(md_file.relative_to(ROOT)).replace("\\", "/")}
+        if content.startswith("---"):
+            try:
+                import yaml
+                _, fm, _ = content.split("---", 2)
+                meta = yaml.safe_load(fm)
+                entry.update({
+                    "document_number": meta.get("document_number", ""),
+                    "title": meta.get("title", ""),
+                    "applicant": meta.get("applicant", ""),
+                    "product_code": meta.get("product_code", ""),
+                    "decision_date": meta.get("decision_date", ""),
+                    "decision": meta.get("decision", ""),
+                    "supplement_number": meta.get("supplement_number", ""),
+                    "source_url": meta.get("source_url", ""),
+                })
+            except Exception:
+                pass
+        index["documents"]["pma_summaries"].append(entry)
 
     index_path = ROOT / "index.json"
     with open(index_path, "w") as f:
         json.dump(index, f, indent=2, default=str)
+
+    # Copy to docs/ for GitHub Pages
+    docs_index = ROOT / "docs" / "index.json"
+    if docs_index.parent.exists():
+        import shutil
+        shutil.copy2(index_path, docs_index)
 
     total = sum(len(v) for v in index["documents"].values())
     print(f"  Index rebuilt: {total} documents")

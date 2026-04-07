@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FDA Open Regulatory Documents</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8f9fa; color: #212529; }
+    header { background: #1a5276; color: white; padding: 1.5rem 2rem; }
+    header h1 { font-size: 1.5rem; font-weight: 600; }
+    header p { opacity: 0.85; margin-top: 0.3rem; font-size: 0.9rem; }
+    .controls { padding: 1rem 2rem; background: white; border-bottom: 1px solid #dee2e6; display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+    .controls input, .controls select { padding: 0.5rem 0.75rem; border: 1px solid #ced4da; border-radius: 4px; font-size: 0.875rem; }
+    .controls input { flex: 1; min-width: 200px; }
+    .controls select { min-width: 140px; }
+    .stats { padding: 0.5rem 2rem; font-size: 0.8rem; color: #6c757d; background: white; border-bottom: 1px solid #dee2e6; }
+    .table-wrap { padding: 1rem 2rem; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-size: 0.85rem; }
+    th { background: #e9ecef; text-align: left; padding: 0.6rem 0.75rem; font-weight: 600; cursor: pointer; user-select: none; white-space: nowrap; }
+    th:hover { background: #dee2e6; }
+    th .sort-arrow { margin-left: 4px; opacity: 0.4; }
+    th.sorted .sort-arrow { opacity: 1; }
+    td { padding: 0.5rem 0.75rem; border-top: 1px solid #f0f0f0; vertical-align: top; }
+    tr:hover td { background: #f8f9fa; }
+    .tag { display: inline-block; background: #e3f2fd; color: #1565c0; padding: 1px 6px; border-radius: 3px; font-size: 0.75rem; margin: 1px 2px; }
+    .tag.center { background: #e8f5e9; color: #2e7d32; }
+    .tag.status-final { background: #e8f5e9; color: #2e7d32; }
+    .tag.status-draft { background: #fff3e0; color: #e65100; }
+    .tag.decision { background: #f3e5f5; color: #6a1b9a; }
+    a { color: #1565c0; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .type-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.75rem; font-weight: 600; }
+    .type-guidance { background: #bbdefb; color: #0d47a1; }
+    .type-510k { background: #c8e6c9; color: #1b5e20; }
+    .type-pma { background: #f8bbd0; color: #880e4f; }
+    .empty { text-align: center; padding: 3rem; color: #6c757d; }
+    footer { text-align: center; padding: 1.5rem; font-size: 0.8rem; color: #6c757d; }
+    footer a { color: #6c757d; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>FDA Open Regulatory Documents</h1>
+  <p>Searchable index of FDA guidance documents, 510(k) summaries, and PMA summaries &mdash; structured as markdown</p>
+</header>
+
+<div class="controls">
+  <input type="text" id="search" placeholder="Search by title, applicant, document number...">
+  <select id="typeFilter">
+    <option value="">All types</option>
+    <option value="guidance">Guidances</option>
+    <option value="510k">510(k) Summaries</option>
+    <option value="pma">PMA Summaries</option>
+  </select>
+  <select id="centerFilter">
+    <option value="">All centers</option>
+  </select>
+  <select id="statusFilter">
+    <option value="">All statuses</option>
+  </select>
+</div>
+<div class="stats" id="stats"></div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th data-col="type" style="width:90px">Type <span class="sort-arrow">&#9650;</span></th>
+        <th data-col="document_number" style="width:100px">Doc # <span class="sort-arrow">&#9650;</span></th>
+        <th data-col="title">Title <span class="sort-arrow">&#9650;</span></th>
+        <th data-col="center" style="width:70px">Center <span class="sort-arrow">&#9650;</span></th>
+        <th data-col="status" style="width:70px">Status <span class="sort-arrow">&#9650;</span></th>
+        <th data-col="date" style="width:100px">Date <span class="sort-arrow">&#9650;</span></th>
+        <th data-col="applicant">Applicant <span class="sort-arrow">&#9650;</span></th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+  <div class="empty" id="empty" style="display:none">No documents match your filters.</div>
+</div>
+
+<footer>
+  Data from <a href="https://open.fda.gov">openFDA</a> and <a href="https://www.fda.gov">FDA.gov</a>.
+  Source on <a href="https://github.com/Aethl/FDA-Markdown">GitHub</a>.
+  Updated <span id="lastUpdated"></span>.
+</footer>
+
+<script>
+const REPO_BASE = "https://github.com/Aethl/FDA-Markdown/blob/main/";
+let allDocs = [];
+let sortCol = "date";
+let sortAsc = false;
+
+async function loadData() {
+  // index.json is copied into docs/ alongside this file
+  let resp;
+  try {
+    resp = await fetch("index.json");
+    if (!resp.ok) throw new Error();
+  } catch {
+    // Fall back to parent directory (local dev)
+    resp = await fetch("../index.json");
+  }
+  const data = await resp.json();
+
+  document.getElementById("lastUpdated").textContent = data.last_updated?.split("T")[0] || "";
+
+  // Normalize all documents into a flat list
+  for (const doc of data.documents.guidances || []) {
+    allDocs.push({
+      type: "guidance",
+      document_number: doc.document_number || "",
+      title: doc.title || doc.file.split("/").pop().replace(".md", ""),
+      center: doc.fda_center || "",
+      status: doc.status || "",
+      date: doc.date_issued || "",
+      applicant: "",
+      topics: doc.topics || [],
+      file: doc.file,
+      source_url: doc.source_url || "",
+    });
+  }
+  for (const doc of data.documents["510k_summaries"] || []) {
+    allDocs.push({
+      type: "510k",
+      document_number: doc.document_number || "",
+      title: doc.title || "",
+      center: "",
+      status: doc.decision || "",
+      date: doc.decision_date || "",
+      applicant: doc.applicant || "",
+      topics: [],
+      file: doc.file,
+      source_url: doc.source_url || "",
+    });
+  }
+  for (const doc of data.documents.pma_summaries || []) {
+    allDocs.push({
+      type: "pma",
+      document_number: doc.document_number || "",
+      title: doc.title || "",
+      center: "",
+      status: doc.decision || "",
+      date: doc.decision_date || "",
+      applicant: doc.applicant || "",
+      topics: [],
+      file: doc.file,
+      source_url: doc.source_url || "",
+    });
+  }
+
+  populateFilters();
+  render();
+}
+
+function populateFilters() {
+  const centers = new Set(allDocs.map(d => d.center).filter(Boolean));
+  const statuses = new Set(allDocs.map(d => d.status).filter(Boolean));
+
+  const centerSelect = document.getElementById("centerFilter");
+  [...centers].sort().forEach(c => {
+    const opt = document.createElement("option");
+    opt.value = c; opt.textContent = c;
+    centerSelect.appendChild(opt);
+  });
+
+  const statusSelect = document.getElementById("statusFilter");
+  [...statuses].sort().forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = s; opt.textContent = s;
+    statusSelect.appendChild(opt);
+  });
+}
+
+function getFiltered() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const typeF = document.getElementById("typeFilter").value;
+  const centerF = document.getElementById("centerFilter").value;
+  const statusF = document.getElementById("statusFilter").value;
+
+  return allDocs.filter(d => {
+    if (typeF && d.type !== typeF) return false;
+    if (centerF && d.center !== centerF) return false;
+    if (statusF && d.status !== statusF) return false;
+    if (q) {
+      const searchable = [d.title, d.document_number, d.applicant, d.center, d.status, ...d.topics].join(" ").toLowerCase();
+      if (!searchable.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function sortDocs(docs) {
+  return docs.sort((a, b) => {
+    let va = a[sortCol] || "";
+    let vb = b[sortCol] || "";
+    if (typeof va === "string") va = va.toLowerCase();
+    if (typeof vb === "string") vb = vb.toLowerCase();
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+}
+
+function render() {
+  const filtered = sortDocs(getFiltered());
+  const tbody = document.getElementById("tableBody");
+  const empty = document.getElementById("empty");
+
+  document.getElementById("stats").textContent =
+    `Showing ${filtered.length} of ${allDocs.length} documents`;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = "";
+    empty.style.display = "block";
+    return;
+  }
+  empty.style.display = "none";
+
+  // Render up to 500 rows (for performance)
+  const show = filtered.slice(0, 500);
+  tbody.innerHTML = show.map(d => {
+    const typeClass = `type-${d.type}`;
+    const typeLabel = d.type === "510k" ? "510(k)" : d.type === "pma" ? "PMA" : "Guidance";
+    const statusClass = d.status === "final" ? "status-final" : d.status === "draft" ? "status-draft" : "decision";
+    const fileUrl = REPO_BASE + d.file;
+    return `<tr>
+      <td><span class="type-badge ${typeClass}">${typeLabel}</span></td>
+      <td>${esc(d.document_number)}</td>
+      <td><a href="${fileUrl}" target="_blank">${esc(d.title || d.file.split("/").pop())}</a></td>
+      <td>${d.center ? `<span class="tag center">${esc(d.center)}</span>` : ""}</td>
+      <td>${d.status ? `<span class="tag ${statusClass}">${esc(d.status)}</span>` : ""}</td>
+      <td>${esc(d.date)}</td>
+      <td>${esc(d.applicant)}</td>
+    </tr>`;
+  }).join("");
+
+  if (filtered.length > 500) {
+    tbody.innerHTML += `<tr><td colspan="7" style="text-align:center;color:#6c757d;padding:1rem">Showing first 500 of ${filtered.length} results. Use filters to narrow down.</td></tr>`;
+  }
+
+  // Update sort indicators
+  document.querySelectorAll("th").forEach(th => {
+    th.classList.toggle("sorted", th.dataset.col === sortCol);
+    const arrow = th.querySelector(".sort-arrow");
+    if (arrow) arrow.textContent = (th.dataset.col === sortCol && sortAsc) ? "\u25B2" : "\u25BC";
+  });
+}
+
+function esc(s) {
+  if (!s) return "";
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Event listeners
+document.getElementById("search").addEventListener("input", render);
+document.getElementById("typeFilter").addEventListener("change", render);
+document.getElementById("centerFilter").addEventListener("change", render);
+document.getElementById("statusFilter").addEventListener("change", render);
+
+document.querySelectorAll("th[data-col]").forEach(th => {
+  th.addEventListener("click", () => {
+    const col = th.dataset.col;
+    if (sortCol === col) { sortAsc = !sortAsc; }
+    else { sortCol = col; sortAsc = true; }
+    render();
+  });
+});
+
+loadData();
+</script>
+
+</body>
+</html>
